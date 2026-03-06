@@ -1,0 +1,193 @@
+esphome:
+  name: weekett-replacement
+  friendly_name: "WeeKett Replacement"
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+# Logging
+logger:
+
+# Home Assistant API
+api:
+  encryption:
+    key: !secret weekett_replacement_api_key
+
+# OTA upgrades
+ota:
+  - platform: esphome
+    password: !secret weekett_replacement_ota_password
+
+# WiFi
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 192.168.40.23
+
+  # Fallback hotspot (captive portal)
+  ap:
+    ssid: "Weekett-Replacement"
+    password: "12345678"
+
+captive_portal:
+
+<<: !include includes/debug.yaml
+
+# Enable UART
+uart:
+  tx_pin: GPIO21
+  rx_pin: GPIO20
+  baud_rate: 9600
+  # debug:
+
+# Enable Tuya MCU protocol via UART
+tuya:
+  on_datapoint_update:
+    - sensor_datapoint: 19 # problem bitfield 
+      datapoint_type: bitmask
+      then:
+        - binary_sensor.template.publish:
+            id: kettle_absent
+            state: !lambda 'return (x & 0x02);'
+    - sensor_datapoint: 15 # status
+      datapoint_type: enum
+      then:
+        - text_sensor.template.publish:
+            id: status
+            # {“range”:[“standby”,“heating”,“cooling”,“warm”,“heating_temp”,“boiling_temp”,“reserve_1”,“reserve_2”,“reserve_3”]}
+            state: !lambda |-
+              switch (x) {
+                case 0:
+                  return "standby";
+                case 1:
+                  return "heating";
+                case 2:
+                  return "cooling";
+                case 3:
+                  return "keeping_warm";
+                case 4:
+                  return "heating_temp"; // TODO tuya local thinks this is "no_water", test
+                case 5:
+                  return "boiling_temp"; // TODO what is the difference from heating?
+                default:
+                  return "unknown";
+              }
+
+
+sensor:
+  - platform: tuya
+    name: "Current Temperature"
+    sensor_datapoint: 2
+    device_class: temperature
+    unit_of_measurement: °C
+  - platform: tuya
+    name: "Problem Bitfield"
+    sensor_datapoint: 19
+    # device_class: temperature
+    # unit_of_measurement: °C
+    entity_category: diagnostic
+    disabled_by_default: true
+    # on_raw_value:
+    #   then:
+    #     - binary_sensor.template.publish:
+    #         id: kettle_absent
+    #         state: !lambda 'return (x & 0x02);'
+
+  - platform: tuya
+    name: "Status Raw"
+    sensor_datapoint: 15
+    entity_category: diagnostic
+    disabled_by_default: true
+    # on_raw_value:
+    #   then:
+    #     - text_sensor.template.publish:
+    #         id: status
+    #         # {“range”:[“standby”,“heating”,“cooling”,“warm”,“heating_temp”,“boiling_temp”,“reserve_1”,“reserve_2”,“reserve_3”]}
+    #         state: !lambda |-
+    #           switch (x) {
+    #             case 0:
+    #               return "standby";
+    #             case 1:
+    #               return "heating";
+    #             case 2:
+    #               return "cooling";
+    #             case 3:
+    #               return "warm";
+    #             case 4:
+    #               return "heating_temp"; // TODO tuya local thinks this is "no_water", test
+    #             case 5:
+    #               return "boiling_temp"; // TODO what is the difference from heating?
+    #             default:
+    #               return "unknown";
+    #           }
+
+
+
+binary_sensor:
+  - id: kettle_absent
+    name: "Kettle Absent"
+    platform: template
+
+text_sensor:
+  - id: status
+    name: "Status"
+    platform: template
+
+number:
+  - platform: tuya
+    name: "Setpoint Temperature"
+    number_datapoint: 8
+    min_value: 40
+    max_value: 100
+    step: 5
+    device_class: temperature
+    unit_of_measurement: °C
+
+switch:
+  - platform: tuya
+    name: "Operation Mode"
+    switch_datapoint: 1
+  - platform: tuya
+    name: "Keep Warm"
+    switch_datapoint: 13
+  - platform: tuya
+    name: "Bottle Warming"
+    switch_datapoint: 101
+
+# [00:29:32.474][C][tuya:052]: Tuya:
+# [00:29:32.474][C][tuya:069]:   Datapoint 1: switch (value: OFF) - operation mode ✅
+# [00:29:32.475][C][tuya:071]:   Datapoint 2: int value (value: 0) - current C ✅
+# [00:29:32.475][C][tuya:071]:   Datapoint 3: int value (value: 0) - [current F]
+# [00:29:32.475][C][tuya:071]:   Datapoint 8: int value (value: 80) - setpoint C ✅
+# [00:29:32.483][C][tuya:071]:   Datapoint 9: int value (value: 176) - [setpoint F]
+# [00:29:32.483][C][tuya:075]:   Datapoint 12: enum (value: 0) - temperature unit [TODO force to C on startup, just in case]
+# [00:29:32.483][C][tuya:069]:   Datapoint 13: switch (value: OFF) - keep warm ✅
+# [00:29:32.487][C][tuya:075]:   Datapoint 15: enum (value: 0) - status ✅
+# [00:29:32.495][C][tuya:077]:   Datapoint 19: bitmask (value: 2) - problems ✅
+# [00:29:32.496][C][tuya:069]:   Datapoint 101: switch (value: OFF) - bottle warming ✅
+# [00:29:32.497][C][tuya:087]:   Product: '{"p":"01rtpfyd3amxdsps","v":"1.0.0","m":0}'
+
+# TODO turn into a water heater https://esphome.io/components/water_heater/template/
+# TODO make current_temperature unknown if off-hook
+# TODO test minimum set point, it appears it might be unable to heat to less than 56C?
+# TODO is there a problem bitfield flag for "no water"? it doesn't seem to detect this
+
+# TODO looks like we can quick set too with a hidden datapoint? from tuya local:
+# #   - entity: select
+#     translation_key: kettle_mode
+#     dps:
+#       - id: 16
+#         type: string
+#         optional: true
+#         name: option
+#         mapping:
+#           - dps_val: setting_quick
+#             value: quick_heat
+#           - dps_val: boiling_quick
+#             value: quick_boil
+#           - dps_val: temp_setting
+#             value: heat
+#           - dps_val: temp_boiling
+#             value: boil
