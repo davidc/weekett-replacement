@@ -1,3 +1,6 @@
+packages:
+  - !include includes/debug.yaml
+
 esphome:
   name: weekett-replacement
   friendly_name: "WeeKett Replacement"
@@ -33,8 +36,6 @@ wifi:
 
 captive_portal:
 
-<<: !include includes/debug.yaml
-
 # Enable UART
 uart:
   tx_pin: GPIO21
@@ -44,6 +45,7 @@ uart:
 
 # Enable Tuya MCU protocol via UART
 tuya:
+  # These two datapoints need to publish here, otherwise ESPhome will convert them to a float by the time they reach the entity's on_raw_value
   on_datapoint_update:
     - sensor_datapoint: 19 # problem bitfield 
       datapoint_type: bitmask
@@ -56,74 +58,54 @@ tuya:
       then:
         - text_sensor.template.publish:
             id: status
-            # {“range”:[“standby”,“heating”,“cooling”,“warm”,“heating_temp”,“boiling_temp”,“reserve_1”,“reserve_2”,“reserve_3”]}
             state: !lambda |-
-              switch (x) {
+              switch (x) { // I've only witnessed states 0, 1 and 3
                 case 0:
                   return "standby";
                 case 1:
                   return "heating";
                 case 2:
-                  return "cooling";
+                  return "cooling"; // possibly intended for HVAC?
                 case 3:
                   return "keeping_warm";
                 case 4:
-                  return "heating_temp"; // TODO tuya local thinks this is "no_water", test
+                  return "heating_temp"; // tuya local thinks this is "no_water", but I can't trigger this with an empty kettle, it just boils dry
                 case 5:
-                  return "boiling_temp"; // TODO what is the difference from heating?
+                  return "boiling_temp"; // unknown purpose
                 default:
                   return "unknown";
               }
 
-
 sensor:
-  - platform: tuya
+  - id: current_temperature
     name: "Current Temperature"
+    platform: tuya
     sensor_datapoint: 2
     device_class: temperature
     unit_of_measurement: °C
-  - platform: tuya
+    filters:
+      - lambda: |-
+          if (id(kettle_absent).state) return {};
+          return x;
+    # on_value:
+    #   then:
+    #     - water_heater.template.publish:
+    #         id: kettle
+    #         current_temperature: !lambda 'return x;'
+
+  - id: problem_bitfield
     name: "Problem Bitfield"
+    platform: tuya
     sensor_datapoint: 19
-    # device_class: temperature
-    # unit_of_measurement: °C
     entity_category: diagnostic
     disabled_by_default: true
-    # on_raw_value:
-    #   then:
-    #     - binary_sensor.template.publish:
-    #         id: kettle_absent
-    #         state: !lambda 'return (x & 0x02);'
 
-  - platform: tuya
+  - id: status_raw
     name: "Status Raw"
+    platform: tuya
     sensor_datapoint: 15
     entity_category: diagnostic
     disabled_by_default: true
-    # on_raw_value:
-    #   then:
-    #     - text_sensor.template.publish:
-    #         id: status
-    #         # {“range”:[“standby”,“heating”,“cooling”,“warm”,“heating_temp”,“boiling_temp”,“reserve_1”,“reserve_2”,“reserve_3”]}
-    #         state: !lambda |-
-    #           switch (x) {
-    #             case 0:
-    #               return "standby";
-    #             case 1:
-    #               return "heating";
-    #             case 2:
-    #               return "cooling";
-    #             case 3:
-    #               return "warm";
-    #             case 4:
-    #               return "heating_temp"; // TODO tuya local thinks this is "no_water", test
-    #             case 5:
-    #               return "boiling_temp"; // TODO what is the difference from heating?
-    #             default:
-    #               return "unknown";
-    #           }
-
-
 
 binary_sensor:
   - id: kettle_absent
@@ -136,25 +118,67 @@ text_sensor:
     platform: template
 
 number:
-  - platform: tuya
+  - id: setpoint_temperature
     name: "Setpoint Temperature"
+    platform: tuya
     number_datapoint: 8
     min_value: 40
     max_value: 100
-    step: 5
+    step: 1
     device_class: temperature
     unit_of_measurement: °C
+    # on_value:
+    #   then:
+    #     - water_heater.template.publish:
+    #         id: kettle
+    #         target_temperature: !lambda ' ESP_LOGI("setpoint", "New setpoint: %d", x); return x;'   
 
 switch:
-  - platform: tuya
+  - id: operation_mode
     name: "Operation Mode"
+    platform: tuya
     switch_datapoint: 1
+    # on_state:
+    #   then:
+    #     - water_heater.template.publish:
+    #         id: kettle
+    #         is_on: !lambda 'return x;'
+    #         mode: !lambda 'return x ? water_heater::WATER_HEATER_MODE_ELECTRIC : water_heater::WATER_HEATER_MODE_OFF;'
+
   - platform: tuya
     name: "Keep Warm"
     switch_datapoint: 13
   - platform: tuya
     name: "Bottle Warming"
     switch_datapoint: 101
+
+water_heater:
+  - id: kettle
+    name: None # "Kettle"
+    platform: template
+    optimistic: true
+    current_temperature: !lambda 'return id(current_temperature).state;'
+    target_temperature: !lambda 'return id(setpoint_temperature).state;'
+    is_on: !lambda 'return id(operation_mode).state;'
+    mode: !lambda 'return id(operation_mode).state ? water_heater::WATER_HEATER_MODE_ELECTRIC : water_heater::WATER_HEATER_MODE_OFF;'
+    icon: mdi:kettle
+    visual:
+      min_temperature: 40
+      max_temperature: 100
+      target_temperature_step: 5
+    supported_modes:
+      - "OFF"
+      - ELECTRIC
+    set_action:
+      - lambda: |-
+          ESP_LOGI("boiler", "New mode: %d", id(kettle).get_mode());
+          ESP_LOGI("boiler", "New target temperature: %.1f", id(kettle).get_target_temperature());
+          ESP_LOGI("boiler", "On: %s, Away: %s", YESNO(id(kettle).is_on()), YESNO(id(kettle).is_away()));
+          auto call = id(setpoint_temperature).make_call();
+          call.set_value(id(kettle).get_target_temperature());
+          call.perform();
+          id(operation_mode).control(id(kettle).is_on());
+
 
 # [00:29:32.474][C][tuya:052]: Tuya:
 # [00:29:32.474][C][tuya:069]:   Datapoint 1: switch (value: OFF) - operation mode ✅
@@ -169,25 +193,7 @@ switch:
 # [00:29:32.496][C][tuya:069]:   Datapoint 101: switch (value: OFF) - bottle warming ✅
 # [00:29:32.497][C][tuya:087]:   Product: '{"p":"01rtpfyd3amxdsps","v":"1.0.0","m":0}'
 
-# TODO turn into a water heater https://esphome.io/components/water_heater/template/
-# TODO make current_temperature unknown if off-hook
+# TODO I've made it not publish current temperature if the kettle is off-hook, but is it possible to publish an actual "unknown"?
 # TODO test minimum set point, it appears it might be unable to heat to less than 56C?
 # TODO is there a problem bitfield flag for "no water"? it doesn't seem to detect this
-
-# TODO looks like we can quick set too with a hidden datapoint? from tuya local:
-# #   - entity: select
-#     translation_key: kettle_mode
-#     dps:
-#       - id: 16
-#         type: string
-#         optional: true
-#         name: option
-#         mapping:
-#           - dps_val: setting_quick
-#             value: quick_heat
-#           - dps_val: boiling_quick
-#             value: quick_boil
-#           - dps_val: temp_setting
-#             value: heat
-#           - dps_val: temp_boiling
-#             value: boil
+# TODO what is problem bitfield flag 1, is it "at temperature"? It showed up when it reached boil

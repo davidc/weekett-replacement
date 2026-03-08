@@ -1,0 +1,72 @@
+debug:
+  update_interval: 30s
+
+text_sensor:
+  - platform: debug
+    device:
+      name: "Device Info"
+      disabled_by_default: true
+    reset_reason:
+      name: "Reset Reason"
+      disabled_by_default: true
+  - platform: wifi_info
+    ip_address:
+      name: Device IP Address
+      disabled_by_default: true
+      # address_0:
+      #   name: Device IP Address 0
+      # address_1:
+      #   name: Device IP Address 1
+      # address_2:
+      #   name: Device IP Address 2
+      # address_3:
+      #   name: Device IP Address 3
+      # address_4:
+      #   name: Device IP Address 4
+    ssid:
+      name: Device Connected SSID
+      disabled_by_default: true
+    bssid:
+      name: Device Connected BSSID
+      disabled_by_default: true
+    mac_address:
+      name: Device WiFi MAC Address
+      disabled_by_default: true
+    # scan_results:
+    #   name: Device Latest Scan Results
+    # dns_address:
+    #   name: Device DNS Address
+    power_save_mode:
+      name: Device Wifi Power Save Mode
+      disabled_by_default: true
+
+sensor:
+  - platform: debug
+    free:
+      name: "Heap Free"
+      disabled_by_default: true
+    block:
+      name: "Heap Max Block"
+      disabled_by_default: true
+    min_free:
+      name: "Heap Min Free"
+      disabled_by_default: true
+    fragmentation:
+      name: "Heap Fragmentation"
+      disabled_by_default: true
+    loop_time:
+      name: "Loop Time"
+      disabled_by_default: true
+    # psram:
+    #   name: "Free PSRAM"
+    #   disabled_by_default: true
+    cpu_frequency:
+      name: "CPU Frequency"
+      disabled_by_default: true
+  
+  - id: wifi_signal_dbm # Reports the WiFi signal strength/RSSI in dBm
+    name: "WiFi Signal dBm"
+    platform: wifi_signal
+    update_interval: 30s
+    entity_category: "diagnostic"
+
